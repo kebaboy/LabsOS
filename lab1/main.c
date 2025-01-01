@@ -8,6 +8,31 @@
 #include <grp.h>
 #include <time.h>
 
+#define COLOR_RESET "\033[0m"
+#define COLOR_BLUE "\033[34m"
+#define COLOR_CYAN "\033[36m"
+#define COLOR_GREEN "\033[32m"
+
+void set_color(const char *color) {
+    printf("%s", color);
+}
+
+void reset_color() {
+    set_color(COLOR_RESET);
+}
+
+void set_color_for_file(mode_t mode) {
+    if (S_ISDIR(mode)) {
+        set_color(COLOR_BLUE);
+    } else if (S_ISLNK(mode)) {
+        set_color(COLOR_CYAN);
+    } else if (mode & S_IXUSR) {
+        set_color(COLOR_GREEN);
+    } else {
+        reset_color();
+    }
+}
+
 int compare(const void *a, const void *b) {
     return strcmp(*(const char **)a, *(const char **)b);
 }
@@ -70,7 +95,12 @@ void list_dir(const char *path, int show_all, int long_list) {
             printf("%s ", timebuf);
         }
 
-        printf("%s\n", files[i]);
+        set_color_for_file(st.st_mode);
+
+        printf("%s", files[i]);
+        reset_color();
+
+        printf("\n");
         free(files[i]);
     }
     free(files);
