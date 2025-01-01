@@ -44,7 +44,7 @@ int main(int argc, char *argv[]) {
                 show_ends = 1;
                 break;
             default:
-                fprintf(stderr, "Usage: mycat [-n] [-b] [-E] [file...]");
+                fprintf(stderr, "Usage: mycat [-n] [-b] [-E] [file...]\n");
                 exit(EXIT_FAILURE);
         }
     }
