@@ -6,7 +6,7 @@ mychmod: main.c
 	gcc main.c -o mychmod
 
 run: mychmod
-	./mychmod u-r test.txt
+	./mychmod
 
 clean:
 	rm -f  mychmod
