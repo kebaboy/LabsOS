@@ -2,92 +2,63 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <signal.h>
 #include <time.h>
-#include <semaphore.h>
+#include <string.h>
 
-#define SHM_NAME "/my_shm"
-#define SEM_NAME "/my_sem"
+#define SHM_SIZE 64
+#define SHM_LOCK_FILE "/tmp/shm_lock_file"
 
-struct shared_data {
-    time_t current_time;
-    pid_t sender_pid;
-};
+char *shared_memory_address = NULL;
+int shared_memory_id = -1;
 
-int shm_fd = -1;
-sem_t *sem = NULL;
-struct shared_data *data = NULL;
-
-void cleanup(void) {  
-    if (data != NULL) {
-        munmap(data, sizeof(struct shared_data));
-    }
-
-    if (shm_fd != -1) {
-        close(shm_fd);
-    }
-
-    shm_unlink(SHM_NAME);
-    sem_unlink(SEM_NAME);
-
-    if (sem != NULL) {
-        sem_close(sem);
+void cleanup() {
+    if (shared_memory_address != NULL) {
+        shmdt(shared_memory_address);
     }
 }
 
-void handle_signal(int sig) {
+void handle_signal(int signal) {
     cleanup();
     exit(0);
 }
 
 int main() {
-    signal(SIGINT, handle_signal);
+    key_t shared_memory_key = ftok(SHM_LOCK_FILE, 1);
+    if (shared_memory_key == -1) {
+        perror("ftok error (shared memory key not found)");
+        return EXIT_FAILURE;
+    }
+
+    shared_memory_id = shmget(shared_memory_key, SHM_SIZE, 0666);
+    if (shared_memory_id == -1) {
+        perror("shmget error (shared memory not found)");
+        return EXIT_FAILURE;
+    }
+
+    shared_memory_address = (char *)shmat(shared_memory_id, NULL, 0);
+    if (shared_memory_address == (void *)-1) {
+        perror("shmat error");
+        return EXIT_FAILURE;
+    }
+
     signal(SIGTERM, handle_signal);
-
-    shm_fd = shm_open(SHM_NAME, O_RDWR, 0666);
-    if (shm_fd == -1) {
-        perror("Error: Shared memory does not exist or cannot be opened");
-        return EXIT_FAILURE;
-    }
-
-    data = mmap(NULL, sizeof(struct shared_data), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (data == MAP_FAILED) {
-        perror("Error mapping shared memory");
-        cleanup();
-        return EXIT_FAILURE;
-    }
-
-    sem = sem_open(SEM_NAME, 0);
-    if (sem == SEM_FAILED) {
-        perror("Error: Semaphore does not exist or cannot be opened");
-        cleanup();
-        return EXIT_FAILURE;
-    }
-
-    char time_str[100];
+    signal(SIGINT, handle_signal);
 
     while (1) {
-        sem_wait(sem);
-
-        pid_t receiver_pid = getpid();
+        char local_time_buffer[SHM_SIZE] = {0};
         time_t current_time;
         time(&current_time);
-        strftime(time_str, sizeof time_str, "%Y-%m-%d %H:%M:%S", localtime(&current_time));
+        strftime(local_time_buffer, sizeof(local_time_buffer), "%Y-%m-%d %H:%M:%S", localtime(&current_time));
 
-        printf("[pid: %d] Receiver current time: %s\n", receiver_pid, time_str);
-
-        char received_time_str[100];
-        strftime(received_time_str, sizeof received_time_str, "%Y-%m-%d %H:%M:%S", localtime(&data->current_time));
-
-        printf("[pid %d] Received data: sender pid = %d, time = %s\n", receiver_pid, data->sender_pid, received_time_str);
-
-        sem_post(sem);
+        printf("[pid: %d] Receiver current time: %s\n", getpid(), local_time_buffer);
+        printf("[pid: %d] Received data: %s\n", getpid(), shared_memory_address);
 
         sleep(3);
     }
 
     cleanup();
-
     return 0;
 }

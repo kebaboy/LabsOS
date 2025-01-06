@@ -2,91 +2,84 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <signal.h>
 #include <time.h>
-#include <semaphore.h>
+#include <string.h>
+#include <sys/stat.h>
 
-#define SHM_NAME "/my_shm"
-#define SEM_NAME "/my_sem"
+#define SHM_SIZE 64
+#define SHM_LOCK_FILE "/tmp/shm_lock_file"
 
-struct shared_data {
-    time_t current_time;
-    pid_t sender_pid;
-};
+char *shared_memory_address = NULL;
+int shared_memory_id = -1;
 
-int shm_fd = -1;
-sem_t *sem = NULL;
-struct shared_data *data = NULL;
-
-void cleanup(void) {  
-    if (data != NULL) {
-        munmap(data, sizeof(struct shared_data));
+void cleanup() {
+    if (shared_memory_address != NULL) {
+        shmdt(shared_memory_address);
     }
 
-    if (shm_fd != -1) {
-        close(shm_fd);
+    if (shared_memory_id != -1) {
+        shmctl(shared_memory_id, IPC_RMID, NULL);
     }
 
-    shm_unlink(SHM_NAME);
-    sem_unlink(SEM_NAME);
-
-    if (sem != NULL) {
-        sem_close(sem);
-    }
+    unlink(SHM_LOCK_FILE);
 }
 
-void handle_signal(int sig) {
+void handle_signal(int signal) {
     cleanup();
     exit(0);
 }
 
 int main() {
+    int lock_file_descriptor = open(SHM_LOCK_FILE, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+    if (lock_file_descriptor == -1) {
+        perror("Sender already running or cannot create lock file");
+        return EXIT_FAILURE;
+    }
+    close(lock_file_descriptor);
+
+    key_t shared_memory_key = ftok(SHM_LOCK_FILE, 1);
+    if (shared_memory_key == -1) {
+        perror("ftok error");
+        unlink(SHM_LOCK_FILE);
+        return EXIT_FAILURE;
+    }
+
+    shared_memory_id = shmget(shared_memory_key, SHM_SIZE, 0666 | IPC_CREAT);
+    if (shared_memory_id == -1) {
+        perror("shmget error");
+        unlink(SHM_LOCK_FILE);
+        return EXIT_FAILURE;
+    }
+
+    shared_memory_address = (char *)shmat(shared_memory_id, NULL, 0);
+    if (shared_memory_address == (void *)-1) {
+        perror("shmat error");
+        shmctl(shared_memory_id, IPC_RMID, NULL);
+        unlink(SHM_LOCK_FILE);
+        return EXIT_FAILURE;
+    }
+
+    signal(SIGTERM, handle_signal);
     signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal); 
 
-    shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
-    if (shm_fd == -1) {
-        perror("Error: Shared memory already exists or cannot be created");
-        return EXIT_FAILURE;
-    }
-
-    if (ftruncate(shm_fd, sizeof(struct shared_data)) == -1) {
-        perror("Error setting size of shared memory");
-        cleanup();
-        return EXIT_FAILURE;
-    }
-
-    data = mmap(NULL, sizeof(struct shared_data), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (data == MAP_FAILED) {
-        perror("Error mapping shared memory");
-        cleanup();
-        return EXIT_FAILURE;
-    }
-
-    sem = sem_open(SEM_NAME, O_CREAT, 0666, 1);
-    if (sem == SEM_FAILED) {
-        perror("Error: Semaphore already exists or cannot be created");
-        cleanup();
-        return EXIT_FAILURE;
-    }
-
-    char time_str[100];
-    
     while (1) {
-        time(&data->current_time);
-        data->sender_pid = getpid();
+        char time_buffer[SHM_SIZE] = {0};
+        char formatted_message[2 * SHM_SIZE] = {0};
 
-        strftime(time_str, sizeof time_str, "%Y-%m-%d %H:%M:%S", localtime(&data->current_time));
+        time_t current_time;
+        time(&current_time);
 
-        sem_wait(sem);
-        printf("Sending data: time = %s, PID = %d\n", time_str, data->sender_pid);
-        sem_post(sem);
+        strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", localtime(&current_time));
+        snprintf(formatted_message, sizeof(formatted_message), "time = %s, PID = %d", time_buffer, getpid());
+
+        strncpy(shared_memory_address, formatted_message, SHM_SIZE - 1);
 
         sleep(3);
     }
 
     cleanup();
-
     return 0;
 }
