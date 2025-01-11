@@ -1,6 +1,6 @@
 .PHONY: all mypipe myfifo clean
 
-all: mypipe, myfifo
+all: mypipe myfifo
 
 mypipe: pipe.c
 	gcc -o mypipe pipe.c
